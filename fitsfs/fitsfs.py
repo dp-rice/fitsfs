@@ -7,7 +7,7 @@ def fit_sfs(
     sfs_obs: np.ndarray,
     k_max: int,
     num_epochs: int,
-    time_bounds: tuple[float, float],
+    interval_bounds: tuple[float, float],
     size_bounds: tuple[float, float],
     initial_size: float,
     num_restarts: int,
@@ -21,18 +21,21 @@ def fit_sfs(
         return cross_entropy(target, _sfs_exp(sizes, times, initial_size, V, W))
 
     size_starts = np.random.uniform(*size_bounds, size=(num_restarts, num_epochs - 1))
-    time_starts = np.random.uniform(*time_bounds, size=(num_restarts, num_epochs - 1))
+    interval_starts = np.random.uniform(
+        *interval_bounds, size=(num_restarts, num_epochs - 1)
+    )
     minima = (
         autoptim.minimize(
             loss,
-            [sizes_0, times_0],
+            [sizes_0, interval_0],
             bounds=bounds,
             method="L-BFGS-B",
         )[0]
-        for sizes_0, times_0 in zip(size_starts, time_starts)
+        for sizes_0, interval_0 in zip(size_starts, interval_starts)
     )
-    sizes_fit, times_fit = min(minima, key=lambda x: loss(*x))
-    sfs_fit = _sfs_exp(sizes_fit, times_fit, initial_size, V, W)
+    sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
+    times_fit = np.cumsum(intervals_fit)
+    sfs_fit = _sfs_exp(sizes_fit, intervals_fit, initial_size, V, W)
     kld = kl_div(target, sfs_fit)
     return sizes_fit, times_fit, sfs_fit, kld
 
@@ -45,13 +48,14 @@ def lump(a: np.ndarray, k_max: int, axis: int = 0):
 
 
 def sfs_exp(sizes, times, initial_size: float, n: int):
+    intervals = np.concatenate(([times[0]], np.diff(times)))
     V = precompute_V(n)
     W = precompute_W(n)
-    return _sfs_exp(sizes, times, initial_size, V, W)
+    return _sfs_exp(sizes, intervals, initial_size, V, W)
 
 
-def _sfs_exp(sizes, times, initial_size, V, W):
-    c = c_integral(n, sizes=sizes, times=times, initial_size=1.0)
+def _sfs_exp(sizes, intervals, initial_size, V, W):
+    c = c_integral(n, sizes=sizes, intervals=intervals, initial_size=1.0)
     return np.dot(W, c) / np.dot(V, c)
 
 
@@ -63,11 +67,13 @@ def kl_div(p, q):
     return -np.sum(p * np.log(q / p))
 
 
-def c_integral(n: int, sizes, times, initial_size) -> np.ndarray:
+def c_integral(n: int, sizes, intervals, initial_size) -> np.ndarray:
     s = np.pad(sizes, ((1, 0)), mode="constant", constant_values=(initial_size,))
-    t = np.pad(times, ((1, 0)), mode="constant", constant_values=(0,))
     r = np.pad(
-        np.cumsum(np.diff(t) / s[:-1]), ((1, 0)), mode="constant", constant_values=(0,)
+        np.cumsum(intervals / s[:-1]),
+        ((1, 0)),
+        mode="constant",
+        constant_values=(0,),
     )
     m = np.arange(2, n + 1)
     bincoeff = m * (m - 1) / 2
@@ -112,8 +118,10 @@ if __name__ == "__main__":
     print(lump(true_sfs, k_max))
 
     num_epochs = 3
-    bounds = ((1e-1, 10.0), (1e-1, 10.0))
+    bounds = ((1e-1, 10.0), (1e-1, 1.0))
     num_restarts = 100
     fitted = fit_sfs(true_sfs, k_max, num_epochs, bounds[0], bounds[1], 1.0, 100)
     for f in fitted:
         print(f)
+
+    print(lump(fitted[2], k_max))
