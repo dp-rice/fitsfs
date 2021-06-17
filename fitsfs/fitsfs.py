@@ -1,3 +1,5 @@
+from typing import Iterator
+
 import autograd.numpy as np
 import autoptim
 from autograd.scipy.special import gammaln
@@ -7,8 +9,8 @@ def fit_sfs(
     sfs_obs: np.ndarray,
     k_max: int,
     num_epochs: int,
-    interval_bounds: tuple[float, float],
     size_bounds: tuple[float, float],
+    interval_bounds: tuple[float, float],
     initial_size: float,
     num_restarts: int,
 ):
@@ -20,24 +22,36 @@ def fit_sfs(
     def loss(sizes, times) -> float:
         return cross_entropy(target, _sfs_exp(sizes, times, initial_size, V, W))
 
-    size_starts = np.random.uniform(*size_bounds, size=(num_restarts, num_epochs - 1))
-    interval_starts = np.random.uniform(
-        *interval_bounds, size=(num_restarts, num_epochs - 1)
+    sample_starts = _sample_starts(
+        size_bounds, interval_bounds, num_epochs, num_restarts
     )
+
     minima = (
         autoptim.minimize(
             loss,
-            [sizes_0, interval_0],
-            bounds=bounds,
+            start,
+            bounds=(size_bounds, interval_bounds),
             method="L-BFGS-B",
         )[0]
-        for sizes_0, interval_0 in zip(size_starts, interval_starts)
+        for start in sample_starts
     )
     sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
     times_fit = np.cumsum(intervals_fit)
     sfs_fit = _sfs_exp(sizes_fit, intervals_fit, initial_size, V, W)
     kld = kl_div(target, sfs_fit)
     return sizes_fit, times_fit, sfs_fit, kld
+
+
+def _sample_starts(
+    size_bounds: tuple[float, float],
+    interval__bounds: tuple[float, float],
+    num_epochs: int,
+    num_restarts: int,
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    for i in range(num_restarts):
+        size_starts = np.random.uniform(*size_bounds, size=num_epochs - 1)
+        interval_starts = np.random.uniform(*interval_bounds, size=num_epochs - 1)
+        yield size_starts, interval_starts
 
 
 def lump(a: np.ndarray, k_max: int, axis: int = 0):
@@ -118,9 +132,12 @@ if __name__ == "__main__":
     print(lump(true_sfs, k_max))
 
     num_epochs = 3
-    bounds = ((1e-1, 10.0), (1e-1, 1.0))
+    size_bounds = (1e-1, 10.0)
+    interval_bounds = (1e-1, 1.0)
     num_restarts = 100
-    fitted = fit_sfs(true_sfs, k_max, num_epochs, bounds[0], bounds[1], 1.0, 100)
+    fitted = fit_sfs(
+        true_sfs, k_max, num_epochs, size_bounds, interval_bounds, 1.0, 100
+    )
     for f in fitted:
         print(f)
 
