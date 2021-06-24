@@ -6,18 +6,18 @@ import autoptim
 from autograd.scipy.special import gammaln
 
 
-def expected_sfs(sizes: np.ndarray, times: np.ndarray, initial_size: float, n: int):
+def expected_sfs(sizes: np.ndarray, times: np.ndarray, final_size: float, n: int):
     """
     Compute the expected SFS for a piecewise-constant populations size.
 
     Parameters
     ----------
     sizes: np.ndarray
-        The population size in each epoch after the initial one
+        The population size in each epoch starting with the present
     times: np.ndarray
         The start time (backwards in time) of each epoch
-    initial_size: float
-        The population size in the present
+    final_size: float
+        The population size in the final (earliest) epoch
     n: int
         The (haploid) sample size
 
@@ -29,7 +29,7 @@ def expected_sfs(sizes: np.ndarray, times: np.ndarray, initial_size: float, n: i
     intervals = np.concatenate(([times[0]], np.diff(times)))
     V = _precompute_V(n)
     W = _precompute_W(n)
-    return _sfs_exp(n, sizes, intervals, initial_size, V, W)
+    return _sfs_exp(n, sizes, intervals, final_size, V, W)
 
 
 def fit_sfs(
@@ -38,7 +38,7 @@ def fit_sfs(
     num_epochs: int,
     size_bounds: tuple[float, float],
     interval_bounds: tuple[float, float],
-    initial_size: float,
+    final_size: float,
     num_restarts: int,
     options: dict,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
@@ -63,8 +63,8 @@ def fit_sfs(
         Bounds on the population sizes to consider.
     interval_bounds : tuple[float, float]
         Bounds on the epoch lengths to consider.
-    initial_size : float
-        The initial (present) population size.
+    final_size : float
+        The population size in the final (earliest) epoch.
     num_restarts : int
         The number of random starting points to sample.
     options: dict
@@ -83,7 +83,7 @@ def fit_sfs(
     target = _lump(sfs_obs, k_max)
 
     def loss(sizes, times) -> float:
-        return _cross_entropy(target, _sfs_exp(n, sizes, times, initial_size, V, W))
+        return _cross_entropy(target, _sfs_exp(n, sizes, times, final_size, V, W))
 
     sample_starts = _sample_starts(
         size_bounds, interval_bounds, num_epochs, num_restarts
@@ -101,7 +101,7 @@ def fit_sfs(
     )
     sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
     times_fit = np.cumsum(intervals_fit)
-    sfs_fit = _sfs_exp(n, sizes_fit, intervals_fit, initial_size, V, W)
+    sfs_fit = _sfs_exp(n, sizes_fit, intervals_fit, final_size, V, W)
     kld = _kl_div(target, sfs_fit)
     return sizes_fit, times_fit, sfs_fit, kld
 
@@ -125,13 +125,13 @@ def _lump(a: np.ndarray, k_max: int, axis: int = 0):
     return np.concatenate((left, partial_sum), axis=axis)
 
 
-def _sfs_exp(n, sizes, intervals, initial_size, V, W):
-    c = _c_integral(n, sizes=sizes, intervals=intervals, initial_size=1.0)
+def _sfs_exp(n, sizes, intervals, final_size, V, W):
+    c = _c_integral(n, sizes=sizes, intervals=intervals, final_size=1.0)
     return np.dot(W, c) / np.dot(V, c)
 
 
-def _c_integral(n: int, sizes, intervals, initial_size) -> np.ndarray:
-    s = np.pad(sizes, ((1, 0)), mode="constant", constant_values=(initial_size,))
+def _c_integral(n: int, sizes, intervals, final_size) -> np.ndarray:
+    s = np.pad(sizes, ((0, 1)), mode="constant", constant_values=(final_size,))
     r = np.pad(
         np.cumsum(intervals / s[:-1]),
         ((1, 0)),
