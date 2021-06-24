@@ -82,7 +82,7 @@ def fit_sfs(
     target = _lump(sfs_obs, k_max)
 
     def loss(sizes, times) -> float:
-        return cross_entropy(target, _sfs_exp(sizes, times, initial_size, V, W))
+        return _cross_entropy(target, _sfs_exp(sizes, times, initial_size, V, W))
 
     sample_starts = _sample_starts(
         size_bounds, interval_bounds, num_epochs, num_restarts
@@ -101,7 +101,7 @@ def fit_sfs(
     sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
     times_fit = np.cumsum(intervals_fit)
     sfs_fit = _sfs_exp(sizes_fit, intervals_fit, initial_size, V, W)
-    kld = kl_div(target, sfs_fit)
+    kld = _kl_div(target, sfs_fit)
     return sizes_fit, times_fit, sfs_fit, kld
 
 
@@ -170,13 +170,11 @@ def _precompute_W(n: int) -> np.ndarray:
     return W[:, 2:]
 
 
-def cross_entropy(p, q):
-    """Compute the cross-entropy between discrete distributions p and q."""
+def _cross_entropy(p, q):
     return -np.sum(p * np.log(q))
 
 
-def kl_div(p, q):
-    """Compute the KL divergence K(p||q) between discrete distributions p and q."""
+def _kl_div(p, q):
     return -np.sum(p * np.log(q / p))
 
 
