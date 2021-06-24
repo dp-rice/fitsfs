@@ -40,6 +40,7 @@ def fit_sfs(
     interval_bounds: tuple[float, float],
     initial_size: float,
     num_restarts: int,
+    options: dict,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """
     Fit a piecewise-constant population size to a site frequency spectrum.
@@ -66,6 +67,8 @@ def fit_sfs(
         The initial (present) population size.
     num_restarts : int
         The number of random starting points to sample.
+    options: dict
+        Dictionary of options for scipy.minimize.
 
     Returns
     -------
@@ -92,7 +95,7 @@ def fit_sfs(
             start,
             bounds=(size_bounds, interval_bounds),
             method="L-BFGS-B",
-            options={"gtol": 1e-6},
+            options=options,
         )[0]
         for start in sample_starts
     )
