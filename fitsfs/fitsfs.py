@@ -113,9 +113,19 @@ def _sample_starts(
     num_restarts: int,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     for i in range(num_restarts):
-        size_starts = np.random.uniform(*size_bounds, size=num_epochs - 1)
-        interval_starts = np.random.uniform(*interval_bounds, size=num_epochs - 1)
+        size_starts = _log_sample(*size_bounds, size=num_epochs - 1)
+        interval_starts = _log_sample(*interval_bounds, size=num_epochs - 1)
         yield size_starts, interval_starts
+
+
+def _log_sample(
+    lower_bound: float,
+    upper_bound: float,
+    size: int,
+) -> float:
+    return np.exp(
+        np.random.uniform(np.log(lower_bound), np.log(upper_bound), size=size)
+    )
 
 
 def _lump(a: np.ndarray, k_max: int, axis: int = 0):
