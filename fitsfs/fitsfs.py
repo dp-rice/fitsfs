@@ -105,7 +105,7 @@ def fit_sfs(
 
 def _sample_starts(
     size_bounds: tuple[float, float],
-    interval__bounds: tuple[float, float],
+    interval_bounds: tuple[float, float],
     num_epochs: int,
     num_restarts: int,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
