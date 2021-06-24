@@ -29,7 +29,7 @@ def expected_sfs(sizes: np.ndarray, times: np.ndarray, initial_size: float, n: i
     intervals = np.concatenate(([times[0]], np.diff(times)))
     V = _precompute_V(n)
     W = _precompute_W(n)
-    return _sfs_exp(sizes, intervals, initial_size, V, W)
+    return _sfs_exp(n, sizes, intervals, initial_size, V, W)
 
 
 def fit_sfs(
@@ -80,7 +80,7 @@ def fit_sfs(
     target = _lump(sfs_obs, k_max)
 
     def loss(sizes, times) -> float:
-        return _cross_entropy(target, _sfs_exp(sizes, times, initial_size, V, W))
+        return _cross_entropy(target, _sfs_exp(n, sizes, times, initial_size, V, W))
 
     sample_starts = _sample_starts(
         size_bounds, interval_bounds, num_epochs, num_restarts
@@ -98,7 +98,7 @@ def fit_sfs(
     )
     sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
     times_fit = np.cumsum(intervals_fit)
-    sfs_fit = _sfs_exp(sizes_fit, intervals_fit, initial_size, V, W)
+    sfs_fit = _sfs_exp(n, sizes_fit, intervals_fit, initial_size, V, W)
     kld = _kl_div(target, sfs_fit)
     return sizes_fit, times_fit, sfs_fit, kld
 
@@ -122,7 +122,7 @@ def _lump(a: np.ndarray, k_max: int, axis: int = 0):
     return np.concatenate((left, partial_sum), axis=axis)
 
 
-def _sfs_exp(sizes, intervals, initial_size, V, W):
+def _sfs_exp(n, sizes, intervals, initial_size, V, W):
     c = _c_integral(n, sizes=sizes, intervals=intervals, initial_size=1.0)
     return np.dot(W, c) / np.dot(V, c)
 
@@ -174,24 +174,3 @@ def _cross_entropy(p, q):
 
 def _kl_div(p, q):
     return -np.sum(p * np.log(q / p))
-
-
-if __name__ == "__main__":
-    n = 100
-    k_max = 40
-
-    initial_size = 1.0
-    true_sizes = np.array([0.25, 1.00])
-    true_times = np.array([0.5, 0.6])
-    true_sfs = expected_sfs(true_sizes, true_times, initial_size, n)
-    print(_lump(true_sfs, k_max))
-
-    num_epochs = 3
-    size_bounds = (1e-1, 10.0)
-    interval_bounds = (1e-1, 1.0)
-    num_restarts = 100
-    fitted = fit_sfs(
-        true_sfs, k_max, num_epochs, size_bounds, interval_bounds, initial_size, 100
-    )
-    for f in fitted:
-        print(f)
