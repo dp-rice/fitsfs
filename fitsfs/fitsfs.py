@@ -1,8 +1,37 @@
+"""Fit a piecewise constant population size to a site frequency spectrum."""
 from typing import Iterator
 
 import autograd.numpy as np
 import autoptim
 from autograd.scipy.special import gammaln
+
+
+def expected_sfs(
+    sizes: np.ndarray[float], times: np.ndarray[float], initial_size: float, n: int
+):
+    """
+    Compute the expected SFS for a piecewise-constant populations size.
+
+    Parameters
+    ----------
+    sizes: np.ndarray[float]
+        The population size in each epoch after the initial one
+    times: np.ndarray[float]
+        The start time (backwards in time) of each epoch
+    initial_size: float
+        The population size in the present
+    n: int
+        The (haploid) sample size
+
+    Returns
+    -------
+    np.ndarray[float]
+        The expected site frequency spectrum for the specified model.
+    """
+    intervals = np.concatenate(([times[0]], np.diff(times)))
+    V = _precompute_V(n)
+    W = _precompute_W(n)
+    return _sfs_exp(sizes, intervals, initial_size, V, W)
 
 
 def fit_sfs(
@@ -13,11 +42,44 @@ def fit_sfs(
     interval_bounds: tuple[float, float],
     initial_size: float,
     num_restarts: int,
-):
+) -> tuple[np.ndarray[float], np.ndarray[float], np.ndarray[float], float]:
+    """
+    Fit a piecewise-constant population size to a site frequency spectrum.
+
+    A partial reimplimentation of fastNeutrino (Bhaskar et al 2015).
+    Uses L-BFGS-B to minimize the KL divergence between the expected and observed SFS,
+    with automatic differentiation to compute the gradient.
+
+    Parameters
+    ----------
+    sfs_obs : np.ndarray
+        The observed SFS to fit normalized to 1.
+        `sfs_obs[0]` is the fraction of singletons.
+    k_max : int
+        The allele frequency cutoff for fitting.
+        All higher-count alleles are lumped together.
+    num_epochs : int
+        The number of epochs (including the present) in the piecewise-constant model.
+    size_bounds : tuple[float, float]
+        Bounds on the population sizes to consider.
+    interval_bounds : tuple[float, float]
+        Bounds on the epoch lengths to consider.
+    initial_size : float
+        The initial (present) population size.
+    num_restarts : int
+        The number of random starting points to sample.
+
+    Returns
+    -------
+    tuple[np.ndarray[float], np.ndarray[float], np.ndarray[float], float]:
+        `(sizes_fit, times_fit, sfs_fit, kl_divergence)`
+        Returns the best fit epoch sizes and start times,
+        the expected SFS, and KL(sfs_obs || sfs_exp).
+    """
     n = len(sfs_obs) + 1
-    V = precompute_V(n)
-    W = lump(precompute_W(n), k_max, axis=0)
-    target = lump(sfs_obs, k_max)
+    V = _precompute_V(n)
+    W = _lump(_precompute_W(n), k_max, axis=0)
+    target = _lump(sfs_obs, k_max)
 
     def loss(sizes, times) -> float:
         return cross_entropy(target, _sfs_exp(sizes, times, initial_size, V, W))
@@ -32,6 +94,7 @@ def fit_sfs(
             start,
             bounds=(size_bounds, interval_bounds),
             method="L-BFGS-B",
+            options={"gtol": 1e-6},
         )[0]
         for start in sample_starts
     )
@@ -54,34 +117,19 @@ def _sample_starts(
         yield size_starts, interval_starts
 
 
-def lump(a: np.ndarray, k_max: int, axis: int = 0):
+def _lump(a: np.ndarray, k_max: int, axis: int = 0):
     left = a.take(indices=range(k_max), axis=axis)
     right = a.take(indices=range(k_max, a.shape[axis]), axis=axis)
     partial_sum = np.sum(right, axis=axis, keepdims=True)
     return np.concatenate((left, partial_sum), axis=axis)
 
 
-def sfs_exp(sizes, times, initial_size: float, n: int):
-    intervals = np.concatenate(([times[0]], np.diff(times)))
-    V = precompute_V(n)
-    W = precompute_W(n)
-    return _sfs_exp(sizes, intervals, initial_size, V, W)
-
-
 def _sfs_exp(sizes, intervals, initial_size, V, W):
-    c = c_integral(n, sizes=sizes, intervals=intervals, initial_size=1.0)
+    c = _c_integral(n, sizes=sizes, intervals=intervals, initial_size=1.0)
     return np.dot(W, c) / np.dot(V, c)
 
 
-def cross_entropy(p, q):
-    return -np.sum(p * np.log(q))
-
-
-def kl_div(p, q):
-    return -np.sum(p * np.log(q / p))
-
-
-def c_integral(n: int, sizes, intervals, initial_size) -> np.ndarray:
+def _c_integral(n: int, sizes, intervals, initial_size) -> np.ndarray:
     s = np.pad(sizes, ((1, 0)), mode="constant", constant_values=(initial_size,))
     r = np.pad(
         np.cumsum(intervals / s[:-1]),
@@ -100,7 +148,7 @@ def c_integral(n: int, sizes, intervals, initial_size) -> np.ndarray:
     return np.dot(s, -np.diff(r_exp, axis=0)) / bincoeff
 
 
-def precompute_V(n: int) -> np.ndarray:
+def _precompute_V(n: int) -> np.ndarray:
     m = np.arange(2, n + 1)
     return (
         (2 * m - 1)
@@ -109,7 +157,7 @@ def precompute_V(n: int) -> np.ndarray:
     )
 
 
-def precompute_W(n: int) -> np.ndarray:
+def _precompute_W(n: int) -> np.ndarray:
     i = np.arange(1, n)
     W = np.zeros((n - 1, n + 1))
     W[:, 2] = 6 / (n + 1)
@@ -122,23 +170,32 @@ def precompute_W(n: int) -> np.ndarray:
     return W[:, 2:]
 
 
+def cross_entropy(p, q):
+    """Compute the cross-entropy between discrete distributions p and q."""
+    return -np.sum(p * np.log(q))
+
+
+def kl_div(p, q):
+    """Compute the KL divergence K(p||q) between discrete distributions p and q."""
+    return -np.sum(p * np.log(q / p))
+
+
 if __name__ == "__main__":
     n = 100
-    k_max = 20
+    k_max = 40
 
-    true_sizes = np.array([0.5, 0.25])
-    true_times = np.array([0.5, 1.0])
-    true_sfs = sfs_exp(true_sizes, true_times, 1.0, 100)
-    print(lump(true_sfs, k_max))
+    initial_size = 1.0
+    true_sizes = np.array([0.25, 1.00])
+    true_times = np.array([0.5, 0.6])
+    true_sfs = expected_sfs(true_sizes, true_times, initial_size, n)
+    print(_lump(true_sfs, k_max))
 
     num_epochs = 3
     size_bounds = (1e-1, 10.0)
     interval_bounds = (1e-1, 1.0)
     num_restarts = 100
     fitted = fit_sfs(
-        true_sfs, k_max, num_epochs, size_bounds, interval_bounds, 1.0, 100
+        true_sfs, k_max, num_epochs, size_bounds, interval_bounds, initial_size, 100
     )
     for f in fitted:
         print(f)
-
-    print(lump(fitted[2], k_max))
