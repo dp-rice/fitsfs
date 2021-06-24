@@ -6,17 +6,15 @@ import autoptim
 from autograd.scipy.special import gammaln
 
 
-def expected_sfs(
-    sizes: np.ndarray[float], times: np.ndarray[float], initial_size: float, n: int
-):
+def expected_sfs(sizes: np.ndarray, times: np.ndarray, initial_size: float, n: int):
     """
     Compute the expected SFS for a piecewise-constant populations size.
 
     Parameters
     ----------
-    sizes: np.ndarray[float]
+    sizes: np.ndarray
         The population size in each epoch after the initial one
-    times: np.ndarray[float]
+    times: np.ndarray
         The start time (backwards in time) of each epoch
     initial_size: float
         The population size in the present
@@ -25,7 +23,7 @@ def expected_sfs(
 
     Returns
     -------
-    np.ndarray[float]
+    np.ndarray
         The expected site frequency spectrum for the specified model.
     """
     intervals = np.concatenate(([times[0]], np.diff(times)))
@@ -42,7 +40,7 @@ def fit_sfs(
     interval_bounds: tuple[float, float],
     initial_size: float,
     num_restarts: int,
-) -> tuple[np.ndarray[float], np.ndarray[float], np.ndarray[float], float]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """
     Fit a piecewise-constant population size to a site frequency spectrum.
 
@@ -71,7 +69,7 @@ def fit_sfs(
 
     Returns
     -------
-    tuple[np.ndarray[float], np.ndarray[float], np.ndarray[float], float]:
+    tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         `(sizes_fit, times_fit, sfs_fit, kl_divergence)`
         Returns the best fit epoch sizes and start times,
         the expected SFS, and KL(sfs_obs || sfs_exp).
