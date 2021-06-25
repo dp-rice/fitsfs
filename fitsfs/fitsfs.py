@@ -1,4 +1,5 @@
 """Fit a piecewise constant population size to a site frequency spectrum."""
+from dataclasses import InitVar, dataclass, field
 from typing import Iterator
 
 import autograd.numpy as np
@@ -6,7 +7,35 @@ import autoptim
 from autograd.scipy.special import gammaln
 
 
-def expected_sfs(sizes: np.ndarray, times: np.ndarray, final_size: float, n: int):
+@dataclass
+class FittedPWCModel:
+    samples: int
+    sizes: list[float] = field(init=False)
+    sizes_iter: InitVar[Iterator[float]]
+    times: list[float] = field(init=False)
+    times_iter: InitVar[Iterator[float]]
+    sfs_obs: list[float] = field(init=False)
+    sfs_iter: InitVar[Iterator[float]]
+    sfs_exp: list[float] = field(init=False)
+    kl_div: float = field(init=False)
+    num_epochs: int = field(init=False)
+    k_max: int = field(init=False)
+
+    def __post_init__(self, sizes_iter, times_iter, sfs_iter):
+        self.sizes = list(sizes_iter)
+        self.times = list(times_iter)
+        self.sfs_obs = list(sfs_iter)
+        self.num_epochs = len(self.times)
+        if len(self.sizes) != self.num_epochs + 1:
+            raise ValueError("`len(sizes)` must equal `len(times) + 1`")
+        self.k_max = len(self.sfs_obs)
+        self.sfs_exp = _lump(
+            expected_sfs(self.sizes, self.times, self.samples), self.k_max
+        )
+        self.kl_div = _kl_div(self.sfs_obs, self.sfs_exp)
+
+
+def expected_sfs(sizes: np.ndarray, times: np.ndarray, samples: int):
     """
     Compute the expected SFS for a piecewise-constant populations size.
 
@@ -16,9 +45,7 @@ def expected_sfs(sizes: np.ndarray, times: np.ndarray, final_size: float, n: int
         The population size in each epoch starting with the present
     times: np.ndarray
         The start time (backwards in time) of each epoch
-    final_size: float
-        The population size in the final (earliest) epoch
-    n: int
+    samples: int
         The (haploid) sample size
 
     Returns
@@ -27,9 +54,9 @@ def expected_sfs(sizes: np.ndarray, times: np.ndarray, final_size: float, n: int
         The expected site frequency spectrum for the specified model.
     """
     intervals = np.concatenate(([times[0]], np.diff(times)))
-    V = _precompute_V(n)
-    W = _precompute_W(n)
-    return _sfs_exp(n, sizes, intervals, final_size, V, W)
+    V = _precompute_V(samples)
+    W = _precompute_W(samples)
+    return _sfs_exp(samples, sizes, intervals, V, W)
 
 
 def fit_sfs(
@@ -38,10 +65,10 @@ def fit_sfs(
     num_epochs: int,
     size_bounds: tuple[float, float],
     interval_bounds: tuple[float, float],
-    final_size: float,
     num_restarts: int,
-    options: dict,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    options: dict = {"ftol": 1e-10, "gtol": 1e-12},
+    lbda: float = 1e-4,
+) -> FittedPWCModel:
     """
     Fit a piecewise-constant population size to a site frequency spectrum.
 
@@ -63,27 +90,30 @@ def fit_sfs(
         Bounds on the population sizes to consider.
     interval_bounds : tuple[float, float]
         Bounds on the epoch lengths to consider.
-    final_size : float
-        The population size in the final (earliest) epoch.
     num_restarts : int
         The number of random starting points to sample.
     options: dict
         Dictionary of options for scipy.minimize.
+    lbda: float
+        The penalty factor on sizes. Used to keep sizes on unit scale. (Default = 1e-4)
 
     Returns
     -------
-    tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-        `(sizes_fit, times_fit, sfs_fit, kl_divergence)`
-        Returns the best fit epoch sizes and start times,
-        the expected SFS, and KL(sfs_obs || sfs_exp).
+    FittedPWCModel
+
     """
-    n = len(sfs_obs) + 1
-    V = _precompute_V(n)
-    W = _lump(_precompute_W(n), k_max, axis=0)
+    samples = len(sfs_obs) + 1
+    V = _precompute_V(samples)
+    W = _lump(_precompute_W(samples), k_max, axis=0)
     target = _lump(sfs_obs, k_max)
 
-    def loss(sizes, times) -> float:
-        return _cross_entropy(target, _sfs_exp(n, sizes, times, final_size, V, W))
+    def penalty(sizes, intervals) -> float:
+        return lbda * np.sum(np.log(sizes) ** 2)
+
+    def loss(sizes, intervals) -> float:
+        return _cross_entropy(
+            target, _sfs_exp(samples, sizes, intervals, V, W)
+        ) + penalty(sizes, intervals)
 
     sample_starts = _sample_starts(
         size_bounds, interval_bounds, num_epochs, num_restarts
@@ -101,9 +131,7 @@ def fit_sfs(
     )
     sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
     times_fit = np.cumsum(intervals_fit)
-    sfs_fit = _sfs_exp(n, sizes_fit, intervals_fit, final_size, V, W)
-    kld = _kl_div(target, sfs_fit)
-    return sizes_fit, times_fit, sfs_fit, kld
+    return FittedPWCModel(samples, sizes_fit, times_fit, target)
 
 
 def _sample_starts(
@@ -113,7 +141,7 @@ def _sample_starts(
     num_restarts: int,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     for i in range(num_restarts):
-        size_starts = _log_sample(*size_bounds, size=num_epochs - 1)
+        size_starts = _log_sample(*size_bounds, size=num_epochs)
         interval_starts = _log_sample(*interval_bounds, size=num_epochs - 1)
         yield size_starts, interval_starts
 
@@ -135,18 +163,14 @@ def _lump(a: np.ndarray, k_max: int, axis: int = 0):
     return np.concatenate((left, partial_sum), axis=axis)
 
 
-def _sfs_exp(n, sizes, intervals, final_size, V, W):
-    c = _c_integral(n, sizes=sizes, intervals=intervals, final_size=1.0)
+def _sfs_exp(n, sizes, intervals, V, W):
+    c = _c_integral(n, sizes=sizes, intervals=intervals)
     return np.dot(W, c) / np.dot(V, c)
 
 
-def _c_integral(n: int, sizes, intervals, final_size) -> np.ndarray:
-    s = np.pad(sizes, ((0, 1)), mode="constant", constant_values=(final_size,))
+def _c_integral(n: int, sizes, intervals) -> np.ndarray:
     r = np.pad(
-        np.cumsum(intervals / s[:-1]),
-        ((1, 0)),
-        mode="constant",
-        constant_values=(0,),
+        np.cumsum(intervals / sizes[:-1]), (1, 0), mode="constant", constant_values=(0,)
     )
     m = np.arange(2, n + 1)
     bincoeff = m * (m - 1) / 2
@@ -156,7 +180,7 @@ def _c_integral(n: int, sizes, intervals, final_size) -> np.ndarray:
         mode="constant",
         constant_values=(0,),
     )
-    return np.dot(s, -np.diff(r_exp, axis=0)) / bincoeff
+    return np.dot(sizes, -np.diff(r_exp, axis=0)) / bincoeff
 
 
 def _precompute_V(n: int) -> np.ndarray:
