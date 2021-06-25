@@ -20,6 +20,7 @@ class FittedPWCModel:
     kl_div: float = field(init=False)
     num_epochs: int = field(init=False)
     k_max: int = field(init=False)
+    folded: bool
 
     def __post_init__(self, sizes_iter, times_iter, sfs_iter):
         self.sizes = list(sizes_iter)
@@ -30,12 +31,14 @@ class FittedPWCModel:
             raise ValueError("`len(sizes)` must equal `len(times) + 1`")
         self.k_max = len(self.sfs_obs)
         self.sfs_exp = _lump(
-            expected_sfs(self.sizes, self.times, self.samples), self.k_max
+            expected_sfs(self.sizes, self.times, self.samples, self.folded), self.k_max
         )
         self.kl_div = _kl_div(self.sfs_obs, self.sfs_exp)
 
 
-def expected_sfs(sizes: np.ndarray, times: np.ndarray, samples: int):
+def expected_sfs(
+    sizes: np.ndarray, times: np.ndarray, samples: int, folded: bool = False
+):
     """
     Compute the expected SFS for a piecewise-constant populations size.
 
@@ -55,7 +58,7 @@ def expected_sfs(sizes: np.ndarray, times: np.ndarray, samples: int):
     """
     intervals = np.concatenate(([times[0]], np.diff(times)))
     V = _precompute_V(samples)
-    W = _precompute_W(samples)
+    W = _precompute_W(samples, folded)
     return _sfs_exp(samples, sizes, intervals, V, W)
 
 
@@ -68,6 +71,7 @@ def fit_sfs(
     num_restarts: int,
     options: dict = {"ftol": 1e-10, "gtol": 1e-12},
     lbda: float = 1e-4,
+    folded: bool = False,
 ) -> FittedPWCModel:
     """
     Fit a piecewise-constant population size to a site frequency spectrum.
@@ -95,7 +99,8 @@ def fit_sfs(
     options: dict
         Dictionary of options for scipy.minimize.
     lbda: float
-        The penalty factor on sizes. Used to keep sizes on unit scale. (Default = 1e-4)
+        The penalty coefficient on `log(sizes)`.
+        Used to keep sizes on unit scale. (Default = 1e-4)
 
     Returns
     -------
@@ -104,8 +109,11 @@ def fit_sfs(
     """
     samples = len(sfs_obs) + 1
     V = _precompute_V(samples)
-    W = _lump(_precompute_W(samples), k_max, axis=0)
-    target = _lump(sfs_obs, k_max)
+    W = _lump(_precompute_W(samples, folded), k_max, axis=0)
+    if folded:
+        target = _lump(_fold(sfs_obs), k_max)
+    else:
+        target = _lump(sfs_obs, k_max)
 
     def penalty(sizes, intervals) -> float:
         return lbda * np.sum(np.log(sizes) ** 2)
@@ -131,7 +139,7 @@ def fit_sfs(
     )
     sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
     times_fit = np.cumsum(intervals_fit)
-    return FittedPWCModel(samples, sizes_fit, times_fit, target)
+    return FittedPWCModel(samples, sizes_fit, times_fit, target, folded)
 
 
 def _sample_starts(
@@ -154,6 +162,14 @@ def _log_sample(
     return np.exp(
         np.random.uniform(np.log(lower_bound), np.log(upper_bound), size=size)
     )
+
+
+def _fold(a: np.ndarray, axis: int = 0):
+    n_fold = a.shape[0] // 2
+    folded = np.zeros_like(a)
+    folded[:-n_fold] = a[:-n_fold]
+    folded[:n_fold] += a[: -(n_fold + 1) : -1]
+    return folded
 
 
 def _lump(a: np.ndarray, k_max: int, axis: int = 0):
@@ -192,7 +208,7 @@ def _precompute_V(n: int) -> np.ndarray:
     )
 
 
-def _precompute_W(n: int) -> np.ndarray:
+def _precompute_W(n: int, folded: bool = False) -> np.ndarray:
     i = np.arange(1, n)
     W = np.zeros((n - 1, n + 1))
     W[:, 2] = 6 / (n + 1)
@@ -202,7 +218,10 @@ def _precompute_W(n: int) -> np.ndarray:
             -(1 + m) * (3 + 2 * m) * (n - m) / (m * (2 * m - 1) * (n + m + 1)) * W[:, m]
             + (3 + 2 * m) * (n - 2 * i) / (m * (n + m + 1)) * W[:, m + 1]
         )
-    return W[:, 2:]
+    if folded:
+        return _fold(W[:, 2:])
+    else:
+        return W[:, 2:]
 
 
 def _cross_entropy(p, q):
