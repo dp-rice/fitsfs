@@ -28,8 +28,6 @@ class FittedPWCModel:
         self.times = list(times_iter)
         self.sfs_obs = list(sfs_iter)
         self.num_epochs = len(self.times)
-        if len(self.sizes) != self.num_epochs + 1:
-            raise ValueError("`len(sizes)` must equal `len(times) + 1`")
         self.k_max = len(self.sfs_obs)
         self.sfs_exp = list(
             _lump(
@@ -53,9 +51,10 @@ def expected_sfs(
     Parameters
     ----------
     sizes: np.ndarray
-        The population size in each epoch starting with the present
+        The population size in each epoch starting with the present.
     times: np.ndarray
-        The start time (backwards in time) of each epoch
+        The start time (backwards in time) of each epoch.
+        `len(times)` must be `len(sizes) - 1`
     samples: int
         The (haploid) sample size
 
@@ -64,6 +63,8 @@ def expected_sfs(
     np.ndarray
         The expected site frequency spectrum for the specified model.
     """
+    if len(sizes) != len(times) + 1:
+        raise ValueError("`len(sizes)` must equal `len(times) + 1`")
     intervals = np.concatenate(([times[0]], np.diff(times)))
     V = _precompute_V(samples)
     W = _precompute_W(samples, folded)
@@ -127,53 +128,45 @@ def fit_sfs(
     else:
         target = _lump(sfs_obs, k_max)
 
-    def penalty(sizes, intervals) -> float:
-        return penalty_coef * np.sum(np.log(sizes) ** 2)
+    log_size_bounds = tuple(map(np.log, size_bounds))
+    log_interval_bounds = tuple(map(np.log, interval_bounds))
 
-    def loss(sizes, intervals) -> float:
-        return _cross_entropy(
-            target, _sfs_exp(samples, sizes, intervals, V, W)
-        ) + penalty(sizes, intervals)
-
-    sample_starts = _sample_starts(
-        size_bounds, interval_bounds, num_epochs, num_restarts
+    initial_log_sizes = _sample_initial_parameters(
+        num_epochs, num_restarts, *log_size_bounds
     )
+    initial_log_intervals = _sample_initial_parameters(
+        num_epochs - 1, num_restarts, *log_interval_bounds
+    )
+
+    def penalty(log_sizes, log_intervals) -> float:
+        return penalty_coef * np.sum(log_sizes ** 2)
+
+    def loss(log_sizes, log_intervals) -> float:
+        return _cross_entropy(
+            target, _sfs_exp(samples, np.exp(log_sizes), np.exp(log_intervals), V, W)
+        ) + penalty(log_sizes, log_intervals)
 
     minima = (
         autoptim.minimize(
             loss,
             start,
-            bounds=(size_bounds, interval_bounds),
+            bounds=(log_size_bounds, log_interval_bounds),
             method="L-BFGS-B",
             options=options,
         )[0]
-        for start in sample_starts
+        for start in zip(initial_log_sizes, initial_log_intervals)
     )
-    sizes_fit, intervals_fit = min(minima, key=lambda x: loss(*x))
-    times_fit = np.cumsum(intervals_fit)
+    log_sizes_fit, log_intervals_fit = min(minima, key=lambda x: loss(*x))
+    sizes_fit = np.exp(log_sizes_fit)
+    times_fit = np.cumsum(np.exp(log_intervals_fit))
     return FittedPWCModel(samples, sizes_fit, times_fit, target, folded)
 
 
-def _sample_starts(
-    size_bounds: tuple[float, float],
-    interval_bounds: tuple[float, float],
-    num_epochs: int,
-    num_restarts: int,
-) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+def _sample_initial_parameters(
+    num_params: int, num_restarts: int, lb: float, ub: float
+) -> Iterator[np.ndarray]:
     for i in range(num_restarts):
-        size_starts = _log_sample(*size_bounds, size=num_epochs)
-        interval_starts = _log_sample(*interval_bounds, size=num_epochs - 1)
-        yield size_starts, interval_starts
-
-
-def _log_sample(
-    lower_bound: float,
-    upper_bound: float,
-    size: int,
-) -> float:
-    return np.exp(
-        np.random.uniform(np.log(lower_bound), np.log(upper_bound), size=size)
-    )
+        yield np.random.uniform(lb, ub, size=num_params)
 
 
 def _fold(a: np.ndarray, axis: int = 0):
