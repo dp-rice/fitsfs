@@ -1,4 +1,5 @@
 """Fit a piecewise constant population size to a site frequency spectrum."""
+import json
 from dataclasses import InitVar, dataclass, field
 from typing import Iterator
 
@@ -22,7 +23,7 @@ class FittedPWCModel:
     k_max: int = field(init=False)
     folded: bool
 
-    def __post_init__(self, sizes_iter, times_iter, sfs_iter):
+    def __post_init__(self, sizes_iter, times_iter, sfs_iter):  # noqa D105
         self.sizes = list(sizes_iter)
         self.times = list(times_iter)
         self.sfs_obs = list(sfs_iter)
@@ -30,10 +31,17 @@ class FittedPWCModel:
         if len(self.sizes) != self.num_epochs + 1:
             raise ValueError("`len(sizes)` must equal `len(times) + 1`")
         self.k_max = len(self.sfs_obs)
-        self.sfs_exp = _lump(
-            expected_sfs(self.sizes, self.times, self.samples, self.folded), self.k_max
+        self.sfs_exp = list(
+            _lump(
+                expected_sfs(self.sizes, self.times, self.samples, self.folded),
+                self.k_max,
+            )
         )
-        self.kl_div = _kl_div(self.sfs_obs, self.sfs_exp)
+        self.kl_div = _kl_div(np.array(self.sfs_obs), np.array(self.sfs_exp))
+
+    def toJson(self) -> str:
+        """Return a JSON string representation."""
+        return json.dumps(self, default=lambda o: o.__dict__)
 
 
 def expected_sfs(
@@ -64,14 +72,14 @@ def expected_sfs(
 
 def fit_sfs(
     sfs_obs: np.ndarray,
+    folded: bool,
     k_max: int,
     num_epochs: int,
-    size_bounds: tuple[float, float],
-    interval_bounds: tuple[float, float],
-    num_restarts: int,
+    penalty_coef: float = 1e-4,
+    num_restarts: int = 100,
+    size_bounds: tuple[float, float] = (1e-2, 1e2),
+    interval_bounds: tuple[float, float] = (1e-2, 1e2),
     options: dict = {"ftol": 1e-10, "gtol": 1e-12},
-    lbda: float = 1e-4,
-    folded: bool = False,
 ) -> FittedPWCModel:
     """
     Fit a piecewise-constant population size to a site frequency spectrum.
@@ -80,27 +88,31 @@ def fit_sfs(
     Uses L-BFGS-B to minimize the KL divergence between the expected and observed SFS,
     with automatic differentiation to compute the gradient.
 
+    Uses L^2 norm regularization on the log population sizes to keep them on unit scale.
+
     Parameters
     ----------
     sfs_obs : np.ndarray
         The observed SFS to fit normalized to 1.
         `sfs_obs[0]` is the fraction of singletons.
+    folded : bool
+        If True, fold the SFS.
     k_max : int
         The allele frequency cutoff for fitting.
         All higher-count alleles are lumped together.
     num_epochs : int
         The number of epochs (including the present) in the piecewise-constant model.
-    size_bounds : tuple[float, float]
-        Bounds on the population sizes to consider.
-    interval_bounds : tuple[float, float]
-        Bounds on the epoch lengths to consider.
+    penalty_coef: float
+        The penalty coefficient on `log(sizes)`.
+        Used to keep sizes on unit scale. (default = 1e-4)
     num_restarts : int
-        The number of random starting points to sample.
+        The number of random starting points to sample. (default = 100)
+    size_bounds : tuple[float, float]
+        Bounds on the population sizes to consider. (default = (1e-2, 1e2))
+    interval_bounds : tuple[float, float]
+        Bounds on the epoch lengths to consider. (default = (1e-2, 1e2))
     options: dict
         Dictionary of options for scipy.minimize.
-    lbda: float
-        The penalty coefficient on `log(sizes)`.
-        Used to keep sizes on unit scale. (Default = 1e-4)
 
     Returns
     -------
@@ -116,7 +128,7 @@ def fit_sfs(
         target = _lump(sfs_obs, k_max)
 
     def penalty(sizes, intervals) -> float:
-        return lbda * np.sum(np.log(sizes) ** 2)
+        return penalty_coef * np.sum(np.log(sizes) ** 2)
 
     def loss(sizes, intervals) -> float:
         return _cross_entropy(
