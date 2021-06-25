@@ -129,8 +129,8 @@ def _log_sample(
 
 
 def _lump(a: np.ndarray, k_max: int, axis: int = 0):
-    left = a.take(indices=range(k_max), axis=axis)
-    right = a.take(indices=range(k_max, a.shape[axis]), axis=axis)
+    left = a.take(indices=range(k_max - 1), axis=axis)
+    right = a.take(indices=range(k_max - 1, a.shape[axis]), axis=axis)
     partial_sum = np.sum(right, axis=axis, keepdims=True)
     return np.concatenate((left, partial_sum), axis=axis)
 
