@@ -191,7 +191,10 @@ def _sfs_exp(n, sizes, intervals, V, W):
 
 def _c_integral(n: int, sizes, intervals) -> np.ndarray:
     r = np.pad(
-        np.cumsum(intervals / sizes[:-1]), (1, 0), mode="constant", constant_values=(0,)
+        np.cumsum(intervals / sizes[:-1]) / 2,
+        (1, 0),
+        mode="constant",
+        constant_values=(0,),
     )
     m = np.arange(2, n + 1)
     bincoeff = m * (m - 1) / 2
