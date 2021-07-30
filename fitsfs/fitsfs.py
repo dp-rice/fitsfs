@@ -31,7 +31,7 @@ class FittedPWCModel:
         self.k_max = len(self.sfs_obs)
         self.sfs_exp = list(
             _lump(
-                expected_sfs(self.sizes, self.times, self.samples, self.folded),
+                expected_sfs(np.array(self.sizes), np.array(self.times), self.samples, self.folded),
                 self.k_max,
             )
         )
@@ -66,9 +66,10 @@ def expected_sfs(
     if len(sizes) != len(times) + 1:
         raise ValueError("`len(sizes)` must equal `len(times) + 1`")
     intervals = np.concatenate(([times[0]], np.diff(times)))
+    scaled_intervals = intervals / (2 * sizes[:-1])
     V = _precompute_V(samples)
     W = _precompute_W(samples, folded)
-    return _sfs_exp(samples, sizes, intervals, V, W)
+    return _sfs_exp(samples, sizes, scaled_intervals, V, W)
 
 
 def fit_sfs(
@@ -158,7 +159,7 @@ def fit_sfs(
     )
     log_sizes_fit, log_intervals_fit = min(minima, key=lambda x: loss(*x))
     sizes_fit = np.exp(log_sizes_fit)
-    times_fit = np.cumsum(np.exp(log_intervals_fit))
+    times_fit = np.cumsum(np.exp(log_intervals_fit)) * 2 * sizes_fit[:-1]
     return FittedPWCModel(samples, sizes_fit, times_fit, target, folded)
 
 
@@ -184,14 +185,14 @@ def _lump(a: np.ndarray, k_max: int, axis: int = 0):
     return np.concatenate((left, partial_sum), axis=axis)
 
 
-def _sfs_exp(n, sizes, intervals, V, W):
-    c = _c_integral(n, sizes=sizes, intervals=intervals)
+def _sfs_exp(n, sizes, scaled_intervals, V, W):
+    c = _c_integral(n, sizes=sizes, scaled_intervals=scaled_intervals)
     return np.dot(W, c) / np.dot(V, c)
 
 
-def _c_integral(n: int, sizes, intervals) -> np.ndarray:
+def _c_integral(n: int, sizes, scaled_intervals) -> np.ndarray:
     r = np.pad(
-        np.cumsum(intervals / sizes[:-1]) / 2,
+        np.cumsum(scaled_intervals),
         (1, 0),
         mode="constant",
         constant_values=(0,),
