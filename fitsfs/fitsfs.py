@@ -140,7 +140,7 @@ def fit_sfs(
     )
 
     def penalty(log_sizes, log_intervals) -> float:
-        return penalty_coef * (log_sizes[0]**2 + np.sum(np.diff(log_sizes) ** 2))
+        return penalty_coef * np.sum(log_sizes ** 2)
 
     def loss(log_sizes, log_intervals) -> float:
         return _cross_entropy(
