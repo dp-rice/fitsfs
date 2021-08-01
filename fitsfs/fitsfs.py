@@ -80,7 +80,7 @@ def fit_sfs(
     penalty_coef: float = 1e-4,
     num_restarts: int = 100,
     size_bounds: tuple[float, float] = (1e-2, 1e2),
-    interval_bounds: tuple[float, float] = (1e-2, 1e2),
+    interval_bounds: tuple[float, float] = (1e-2, 1e1),
     options: dict = {"ftol": 1e-10, "gtol": 1e-12},
 ) -> FittedPWCModel:
     """
@@ -112,7 +112,7 @@ def fit_sfs(
     size_bounds : tuple[float, float]
         Bounds on the population sizes to consider. (default = (1e-2, 1e2))
     interval_bounds : tuple[float, float]
-        Bounds on the epoch lengths to consider. (default = (1e-2, 1e2))
+        Bounds on the epoch lengths to consider. (default = (1e-2, 1e1))
     options: dict
         Dictionary of options for scipy.minimize.
 
