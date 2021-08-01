@@ -159,7 +159,7 @@ def fit_sfs(
     )
     log_sizes_fit, log_intervals_fit = min(minima, key=lambda x: loss(*x))
     sizes_fit = np.exp(log_sizes_fit)
-    times_fit = np.cumsum(np.exp(log_intervals_fit)) * 2 * sizes_fit[:-1]
+    times_fit = np.cumsum(2 * np.exp(log_sizes_fit[:-1] + log_intervals_fit))
     return FittedPWCModel(samples, sizes_fit, times_fit, target, folded)
 
 
